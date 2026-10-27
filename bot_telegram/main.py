@@ -1,7 +1,7 @@
 
 import os
-import time
 import requests
+from flask import Flask, request
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -10,7 +10,8 @@ TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TOKEN:
     raise SystemExit(
-        "Token não encontrado! Configure o arquivo .env."
+        "Token não encontrado! Configure TELEGRAM_TOKEN nas "
+        "Environment Variables do Render."
     )
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
@@ -19,6 +20,8 @@ GEOCODING_API = (
     "https://geocoding-api.open-meteo.com/v1/search"
 )
 WEATHER_API = "https://api.open-meteo.com/v1/forecast"
+
+app = Flask(__name__)
 
 DESCRICOES_TEMPO = {
     0: "Céu limpo",
@@ -49,7 +52,7 @@ def enviar_mensagem(chat_id, texto):
     try:
         resposta = requests.post(
             f"{TELEGRAM_API}/sendMessage",
-            data={
+            json={
                 "chat_id": chat_id,
                 "text": texto
             },
@@ -72,7 +75,6 @@ def localizar_cidade(nome_cidade):
         },
         timeout=15
     )
-
     resposta.raise_for_status()
 
     resultados = resposta.json().get("results", [])
@@ -109,7 +111,6 @@ def consultar_tempo(nome_cidade):
         },
         timeout=15
     )
-
     resposta.raise_for_status()
 
     atual = resposta.json()["current"]
@@ -131,12 +132,17 @@ def consultar_tempo(nome_cidade):
         "🌦️ PREVISÃO DO TEMPO\n"
         f"📍 Cidade: {local}\n"
         f"🕒 Horário: {atual.get('time', 'N/D')}\n\n"
-        f"🌡️ Temperatura: {atual.get('temperature_2m', 'N/D')} °C\n"
-        f"🤔 Sensação térmica: {atual.get('apparent_temperature', 'N/D')} °C\n"
+        f"🌡️ Temperatura: "
+        f"{atual.get('temperature_2m', 'N/D')} °C\n"
+        f"🤔 Sensação térmica: "
+        f"{atual.get('apparent_temperature', 'N/D')} °C\n"
         f"☁️ Condição: {descricao}\n"
-        f"💧 Umidade: {atual.get('relative_humidity_2m', 'N/D')}%\n"
-        f"💨 Vento: {atual.get('wind_speed_10m', 'N/D')} km/h\n"
-        f"🌧️ Precipitação: {atual.get('precipitation', 'N/D')} mm\n\n"
+        f"💧 Umidade: "
+        f"{atual.get('relative_humidity_2m', 'N/D')}%\n"
+        f"💨 Vento: "
+        f"{atual.get('wind_speed_10m', 'N/D')} km/h\n"
+        f"🌧️ Precipitação: "
+        f"{atual.get('precipitation', 'N/D')} mm\n\n"
         "Fonte: Open-Meteo"
     )
 
@@ -203,70 +209,84 @@ def processar_mensagem(mensagem):
         resultado = consultar_tempo(nome_cidade)
         enviar_mensagem(chat_id, resultado)
 
-    except requests.RequestException:
+    except requests.RequestException as erro:
+        print("Erro ao consultar previsão:", erro)
         enviar_mensagem(
             chat_id,
             "Não consegui acessar a API agora. "
-            "Verifique a internet e tente novamente."
+            "Tente novamente mais tarde."
+        )
+
+    except (KeyError, ValueError) as erro:
+        print("Erro nos dados meteorológicos:", erro)
+        enviar_mensagem(
+            chat_id,
+            "Não consegui interpretar os dados do tempo. "
+            "Tente novamente."
         )
 
 
-def main():
-    print(
-        "Bot de Previsão do Tempo iniciado. "
-        "Pressione Ctrl+C para parar."
-    )
+@app.route("/", methods=["GET"])
+def inicio():
+    return "Bot de Previsão do Tempo está funcionando!", 200
 
-    offset = None
 
-    while True:
+@app.route("/telegram", methods=["POST"])
+def webhook_telegram():
+    mensagem_recebida = request.get_json(silent=True) or {}
+
+    if not isinstance(mensagem_recebida, dict):
+        return "Requisição inválida", 400
+
+    mensagem = mensagem_recebida.get("message")
+
+    if mensagem:
         try:
-            parametros = {"timeout": 30}
+            processar_mensagem(mensagem)
+        except Exception as erro:
+            print("Erro ao processar mensagem:", erro)
 
-            if offset is not None:
-                parametros["offset"] = offset
+    return "OK", 200
 
-            resposta = requests.get(
-                f"{TELEGRAM_API}/getUpdates",
-                params=parametros,
-                timeout=35
-            )
 
-            resposta.raise_for_status()
-            dados = resposta.json()
+def configurar_webhook():
+    url_render = os.getenv("RENDER_EXTERNAL_URL")
 
-            for atualizacao in dados.get("result", []):
-                offset = atualizacao["update_id"] + 1
+    if not url_render:
+        print("RENDER_EXTERNAL_URL não configurada.")
+        return
 
-                mensagem = atualizacao.get("message")
+    url_webhook = f"{url_render.rstrip('/')}/telegram"
 
-                if mensagem:
-                    processar_mensagem(mensagem)
+    try:
+        resposta = requests.post(
+            f"{TELEGRAM_API}/setWebhook",
+            json={"url": url_webhook},
+            timeout=20
+        )
+        resposta.raise_for_status()
 
-        except requests.HTTPError as erro:
-            status = (
-                erro.response.status_code
-                if erro.response is not None else 0
-            )
+        dados = resposta.json()
+        print("Resultado da configuração do webhook:", dados)
 
-            if status == 409:
-                print(
-                    "Erro 409: feche outras instâncias "
-                    "do mesmo bot."
-                )
-                time.sleep(5)
-            else:
-                print("Erro HTTP:", erro)
-                time.sleep(5)
+        if not dados.get("ok"):
+            print("O Telegram não aceitou o webhook.")
 
-        except requests.RequestException as erro:
-            print("Erro de conexão:", erro)
-            time.sleep(5)
-
-        except KeyboardInterrupt:
-            print("\nBot encerrado.")
-            break
+    except requests.RequestException as erro:
+        print("Erro ao configurar webhook:", erro)
 
 
 if __name__ == "__main__":
-    main()
+    import threading
+
+    threading.Thread(
+        target=configurar_webhook,
+        daemon=True
+    ).start()
+
+    porta = int(os.environ.get("PORT", 10000))
+
+    app.run(
+        host="0.0.0.0",
+        port=porta
+    )
