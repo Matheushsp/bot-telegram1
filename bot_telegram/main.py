@@ -1,15 +1,17 @@
+
 import os
 import logging
 import threading
+from datetime import datetime
 
 import requests
 from flask import Flask, request
 from dotenv import load_dotenv
 
-# Carrega as variáveis do arquivo .env, se existir.
+# Carrega as variáveis do arquivo .env
 load_dotenv()
 
-# Configuração dos logs para o Render.
+# Configuração dos logs
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
@@ -17,7 +19,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-# Token do bot do Telegram.
+# Token do Telegram
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 if not TOKEN:
@@ -28,7 +30,7 @@ if not TOKEN:
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
 
-# APIs gratuitas da Open-Meteo.
+# APIs Open-Meteo
 GEOCODING_API = (
     "https://geocoding-api.open-meteo.com/v1/search"
 )
@@ -37,10 +39,10 @@ WEATHER_API = (
     "https://api.open-meteo.com/v1/forecast"
 )
 
-# Aplicação Flask para receber o webhook.
+# Aplicação Flask
 app = Flask(__name__)
 
-# Descrições das condições meteorológicas.
+# Descrições meteorológicas
 DESCRICOES_TEMPO = {
     0: "Céu limpo",
     1: "Predominantemente limpo",
@@ -73,8 +75,23 @@ DESCRICOES_TEMPO = {
 }
 
 
+def formatar_data_hora(horario):
+    """Converte a data para o formato brasileiro."""
+
+    try:
+        data = datetime.strptime(
+            horario,
+            "%Y-%m-%dT%H:%M"
+        )
+
+        return data.strftime("%d/%m/%Y %H:%M")
+
+    except (ValueError, TypeError):
+        return horario or "N/D"
+
+
 def enviar_mensagem(chat_id, texto):
-    """Envia uma mensagem para o usuário no Telegram."""
+    """Envia mensagem pelo Telegram."""
 
     try:
         resposta = requests.post(
@@ -103,7 +120,7 @@ def enviar_mensagem(chat_id, texto):
 
 
 def localizar_cidade(nome_cidade):
-    """Busca as coordenadas geográficas de uma cidade."""
+    """Busca as coordenadas geográficas."""
 
     logger.info(
         "Consultando geolocalização: %s",
@@ -117,14 +134,10 @@ def localizar_cidade(nome_cidade):
                 "name": nome_cidade,
                 "count": 1,
                 "language": "pt",
-                "format": "json"
+                "format": "json",
+                "countryCode": "BR"
             },
             timeout=20
-        )
-
-        logger.info(
-            "Geocoding HTTP status: %s",
-            resposta.status_code
         )
 
         resposta.raise_for_status()
@@ -165,7 +178,7 @@ def localizar_cidade(nome_cidade):
 
 
 def consultar_tempo(nome_cidade):
-    """Consulta as condições meteorológicas atuais."""
+    """Consulta as condições meteorológicas."""
 
     cidade = localizar_cidade(nome_cidade)
 
@@ -174,12 +187,6 @@ def consultar_tempo(nome_cidade):
             f"Não encontrei a cidade '{nome_cidade}'.\n\n"
             "Confira o nome e tente novamente."
         )
-
-    logger.info(
-        "Consultando previsão para latitude=%s, longitude=%s",
-        cidade.get("latitude"),
-        cidade.get("longitude")
-    )
 
     parametros = {
         "latitude": cidade["latitude"],
@@ -202,11 +209,6 @@ def consultar_tempo(nome_cidade):
             timeout=25
         )
 
-        logger.info(
-            "Open-Meteo HTTP status: %s",
-            resposta.status_code
-        )
-
         resposta.raise_for_status()
 
         dados = resposta.json()
@@ -214,12 +216,6 @@ def consultar_tempo(nome_cidade):
         atual = dados.get("current")
 
         if not isinstance(atual, dict):
-            logger.error(
-                "A resposta da Open-Meteo não contém "
-                "o objeto current. Resposta: %s",
-                dados
-            )
-
             raise ValueError(
                 "Resposta da API sem dados meteorológicos."
             )
@@ -241,6 +237,11 @@ def consultar_tempo(nome_cidade):
             if parte
         )
 
+        # Formata a data para DD/MM/AAAA
+        horario = formatar_data_hora(
+            atual.get("time")
+        )
+
         logger.info(
             "Previsão recebida com sucesso para %s",
             local
@@ -249,8 +250,7 @@ def consultar_tempo(nome_cidade):
         return (
             "🌦️ PREVISÃO DO TEMPO\n\n"
             f"📍 Cidade: {local}\n"
-            f"🕒 Horário local: "
-            f"{atual.get('time', 'N/D')}\n\n"
+            f"🕒 Horário local: {horario}\n\n"
             f"🌡️ Temperatura: "
             f"{atual.get('temperature_2m', 'N/D')} °C\n"
             f"🤔 Sensação térmica: "
@@ -267,22 +267,19 @@ def consultar_tempo(nome_cidade):
 
     except requests.RequestException:
         logger.exception(
-            "ERRO NA REQUISIÇÃO DA API METEOROLÓGICA"
+            "ERRO NA REQUISIÇÃO METEOROLÓGICA"
         )
-
         raise
 
     except ValueError:
         logger.exception(
-            "ERRO AO INTERPRETAR A RESPOSTA "
-            "DA API METEOROLÓGICA"
+            "ERRO AO INTERPRETAR DADOS METEOROLÓGICOS"
         )
-
         raise
 
 
 def processar_mensagem(mensagem):
-    """Interpreta os comandos enviados ao bot."""
+    """Processa os comandos do Telegram."""
 
     chat_id = mensagem.get("chat", {}).get("id")
     texto = mensagem.get("text", "")
@@ -359,20 +356,12 @@ def processar_mensagem(mensagem):
         )
 
     except requests.HTTPError as erro:
-        # Registra status HTTP e resposta da API.
-        logger.error(
-            "ERRO HTTP NA CONSULTA: %r",
-            erro
-        )
+        logger.error("ERRO HTTP: %r", erro)
 
         if erro.response is not None:
             logger.error(
-                "STATUS HTTP: %s",
-                erro.response.status_code
-            )
-
-            logger.error(
-                "RESPOSTA DA API: %s",
+                "STATUS: %s | RESPOSTA: %s",
+                erro.response.status_code,
                 erro.response.text[:2000]
             )
 
@@ -383,42 +372,34 @@ def processar_mensagem(mensagem):
         )
 
     except requests.Timeout:
-        logger.exception(
-            "TEMPO ESGOTADO AO CONSULTAR A API"
-        )
+        logger.exception("TEMPO ESGOTADO")
 
         enviar_mensagem(
             chat_id,
             "A consulta demorou demais. "
-            "Tente novamente em alguns instantes."
+            "Tente novamente."
         )
 
     except requests.ConnectionError:
-        logger.exception(
-            "ERRO DE CONEXÃO COM A API"
-        )
+        logger.exception("ERRO DE CONEXÃO")
 
         enviar_mensagem(
             chat_id,
-            "Não consegui estabelecer conexão com a API. "
+            "Não consegui conectar à API. "
             "Tente novamente mais tarde."
         )
 
     except requests.RequestException:
-        logger.exception(
-            "ERRO DE REQUISIÇÃO DURANTE A CONSULTA"
-        )
+        logger.exception("ERRO DE REQUISIÇÃO")
 
         enviar_mensagem(
             chat_id,
-            "Ocorreu um erro de comunicação com a API. "
+            "Erro de comunicação com a API. "
             "Confira os Logs do Render."
         )
 
     except (ValueError, KeyError, TypeError):
-        logger.exception(
-            "ERRO AO PROCESSAR OS DADOS METEOROLÓGICOS"
-        )
+        logger.exception("ERRO AO PROCESSAR OS DADOS")
 
         enviar_mensagem(
             chat_id,
@@ -427,9 +408,7 @@ def processar_mensagem(mensagem):
         )
 
     except Exception:
-        logger.exception(
-            "ERRO INESPERADO AO PROCESSAR A MENSAGEM"
-        )
+        logger.exception("ERRO INESPERADO")
 
         enviar_mensagem(
             chat_id,
@@ -440,7 +419,7 @@ def processar_mensagem(mensagem):
 
 @app.route("/", methods=["GET"])
 def inicio():
-    """Verifica se o serviço está respondendo."""
+    """Verifica se o serviço está funcionando."""
 
     return (
         "Bot de Previsão do Tempo está funcionando!",
@@ -450,14 +429,13 @@ def inicio():
 
 @app.route("/telegram", methods=["POST"])
 def webhook_telegram():
-    """Recebe as atualizações enviadas pelo Telegram."""
+    """Recebe atualizações do Telegram."""
 
-    mensagem_recebida = request.get_json(silent=True)
+    mensagem_recebida = request.get_json(
+        silent=True
+    )
 
     if not isinstance(mensagem_recebida, dict):
-        logger.warning(
-            "Webhook recebeu JSON inválido."
-        )
         return "Requisição inválida", 400
 
     mensagem = mensagem_recebida.get("message")
@@ -467,16 +445,15 @@ def webhook_telegram():
             processar_mensagem(mensagem)
 
         except Exception:
-            # Evita que erros internos derrubem o webhook.
             logger.exception(
-                "ERRO AO PROCESSAR ATUALIZAÇÃO DO TELEGRAM"
+                "ERRO AO PROCESSAR ATUALIZAÇÃO"
             )
 
     return "OK", 200
 
 
 def configurar_webhook():
-    """Registra a URL pública do Render no Telegram."""
+    """Registra o webhook no Telegram."""
 
     url_render = os.getenv("RENDER_EXTERNAL_URL")
 
@@ -490,9 +467,7 @@ def configurar_webhook():
         f"{url_render.rstrip('/')}/telegram"
     )
 
-    logger.info(
-        "Configurando webhook do Telegram."
-    )
+    logger.info("Configurando webhook do Telegram.")
 
     try:
         resposta = requests.post(
@@ -524,13 +499,15 @@ def configurar_webhook():
 
 
 if __name__ == "__main__":
-    # Configura o webhook sem bloquear a inicialização do Flask.
+
     threading.Thread(
         target=configurar_webhook,
         daemon=True
     ).start()
 
-    porta = int(os.environ.get("PORT", "10000"))
+    porta = int(
+        os.environ.get("PORT", "10000")
+    )
 
     logger.info(
         "Iniciando o bot na porta %s",
