@@ -95,6 +95,28 @@ DESCRICOES_TEMPO = {
 }
 
 
+
+TRADUCOES_CONDICAO = {
+    "patchy rain nearby": "Chuva irregular nas proximidades",
+    "partly cloudy": "Parcialmente nublado",
+    "mostly cloudy": "Predominantemente nublado",
+    "cloudy": "Nublado",
+    "overcast": "Encoberto",
+    "sunny": "Ensolarado",
+    "clear": "Céu limpo",
+    "mist": "Neblina",
+    "fog": "Nevoeiro",
+    "light rain": "Chuva fraca",
+    "moderate rain": "Chuva moderada",
+    "heavy rain": "Chuva forte",
+    "light drizzle": "Garoa leve",
+    "thunderstorm": "Tempestade com trovoadas",
+}
+
+def traduzir_condicao(descricao):
+    texto = str(descricao or "N/D").strip()
+    return TRADUCOES_CONDICAO.get(texto.casefold(), texto)
+
 def formatar_data_hora(horario):
 
     if not horario:
@@ -364,7 +386,7 @@ def consultar_wttr(nome_cidade, cidade=None):
         horario=horario,
         temperatura=atual.get("temp_C", "N/D"),
         sensacao=atual.get("FeelsLikeC", "N/D"),
-        descricao=primeiro_texto(atual.get("weatherDesc")),
+        descricao=traduzir_condicao(primeiro_texto(atual.get("weatherDesc"))),
         umidade=atual.get("humidity", "N/D"),
         vento=atual.get("windspeedKmph", "N/D"),
         precipitacao=atual.get("precipMM", "N/D"),
