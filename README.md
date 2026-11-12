@@ -1,3 +1,3 @@
 # bot-telegram
 
-tema clima tempo 
+Versão local do bot
