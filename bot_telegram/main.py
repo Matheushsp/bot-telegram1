@@ -5,7 +5,6 @@ import time
 import unicodedata
 from datetime import datetime
 import requests
-from flask import Flask, request
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,29 +25,19 @@ if not TOKEN:
 
 
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
-
-
 GEOCODING_API = "https://geocoding-api.open-meteo.com/v1/search"
-
 WEATHER_API = "https://api.open-meteo.com/v1/forecast"
-
 WTTR_API = "https://wttr.in"
-
 
 CACHE_TTL_SEGUNDOS = 30 * 60
 
 cache_tempo = {}
-
 cache_lock = threading.Lock()
 
-
 sessao = requests.Session()
-
 sessao.headers.update({"User-Agent": "BotPrevisaoTempo/1.0"})
 
-
 app = Flask(__name__)
-
 
 DESCRICOES_TEMPO = {
     0: "Céu limpo",
@@ -80,8 +69,6 @@ DESCRICOES_TEMPO = {
     96: "Trovoadas com granizo leve",
     99: "Trovoadas com granizo forte",
 }
-
-
 
 TRADUCOES_CONDICAO = {
     "patchy rain nearby": "Chuva irregular nas proximidades",
@@ -527,11 +514,6 @@ def processar_mensagem(mensagem):
         enviar_mensagem(chat_id, "Ocorreu um erro inesperado. Confira os Logs do Render.")
 
 
-@app.route("/", methods=["GET"])
-def inicio():
-    return "Bot de Previsão do Tempo está funcionando!", 200
-
-
 @app.route("/telegram", methods=["POST"])
 def webhook_telegram():
     mensagem_recebida = request.get_json(silent=True)
@@ -548,37 +530,14 @@ def webhook_telegram():
     return "OK", 200
 
 
-def configurar_webhook():
-
-    url_render = os.getenv("RENDER_EXTERNAL_URL")
-    if not url_render:
-        logger.error("RENDER_EXTERNAL_URL não está disponível.")
-        return
-
-    url_webhook = f"{url_render.rstrip('/')}/telegram"
-    logger.info("Configurando webhook do Telegram.")
-
-    try:
-        resposta = sessao.post(
-            f"{TELEGRAM_API}/setWebhook",
-            json={"url": url_webhook},
-            timeout=20,
-        )
-        resposta.raise_for_status()
-        dados = resposta.json()
-
-        if dados.get("ok"):
-            logger.info("Webhook configurado com sucesso: %s", url_webhook)
-        else:
-            logger.error("Telegram recusou o webhook: %s", dados)
-
-    except requests.RequestException:
-        logger.exception("ERRO AO CONFIGURAR WEBHOOK")
-
-
 if __name__ == "__main__":
-    threading.Thread(target=configurar_webhook, daemon=True).start()
+    #threading.Thread(target=configurar_webhook, daemon=True).start()
+    logger.info("Iniciando o bot")
 
-    porta = int(os.environ.get("PORT", "10000"))
-    logger.info("Iniciando o bot na porta %s", porta)
-    app.run(host="0.0.0.0", port=porta)
+    last_message = sessao.get(TELEGRAM_API+"/getUpdates").json()["result"][-1]
+    while True:
+        message = sessao.get(TELEGRAM_API+"/getUpdates").json()["result"][-1]
+        if not message == last_message:
+            processar_mensagem(message["message"])
+            last_message = message
+        time.sleep(1)
