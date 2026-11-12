@@ -1,27 +1,14 @@
-
-
 import os
-
 import logging
-
 import threading
-
 import time
-
 import unicodedata
-
 from datetime import datetime
-
-
 import requests
-
 from flask import Flask, request
-
 from dotenv import load_dotenv
 
-
 load_dotenv()
-
 
 logging.basicConfig(
     level=logging.INFO,
