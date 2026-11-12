@@ -37,8 +37,6 @@ cache_lock = threading.Lock()
 sessao = requests.Session()
 sessao.headers.update({"User-Agent": "BotPrevisaoTempo/1.0"})
 
-app = Flask(__name__)
-
 DESCRICOES_TEMPO = {
     0: "Céu limpo",
     1: "Predominantemente limpo",
@@ -512,23 +510,6 @@ def processar_mensagem(mensagem):
     except Exception:
         logger.exception("ERRO INESPERADO")
         enviar_mensagem(chat_id, "Ocorreu um erro inesperado. Confira os Logs do Render.")
-
-
-@app.route("/telegram", methods=["POST"])
-def webhook_telegram():
-    mensagem_recebida = request.get_json(silent=True)
-    if not isinstance(mensagem_recebida, dict):
-        return "Requisição inválida", 400
-
-    mensagem = mensagem_recebida.get("message")
-    if mensagem:
-        try:
-            processar_mensagem(mensagem)
-        except Exception:
-            logger.exception("ERRO AO PROCESSAR ATUALIZAÇÃO")
-
-    return "OK", 200
-
 
 if __name__ == "__main__":
     #threading.Thread(target=configurar_webhook, daemon=True).start()
