@@ -250,6 +250,150 @@ def montar_resposta(
         f"Fonte: {fonte}"
     )
 
+
+def consultar_open_meteo(nome_cidade, cidade=None):
+
+    if cidade is None:
+        cidade = localizar_cidade(nome_cidade)
+    if cidade is None:
+        raise LookupError(f"Cidade não encontrada: {nome_cidade}")
+
+    resposta = sessao.get(
+        WEATHER_API,
+        params={
+            "latitude": cidade["latitude"],
+            "longitude": cidade["longitude"],
+            "current": (
+                "temperature_2m,relative_humidity_2m,"
+                "apparent_temperature,precipitation,weather_code,wind_speed_10m"
+            ),
+            "timezone": "auto",
+        },
+        timeout=20,
+    )
+    resposta.raise_for_status()
+    dados = resposta.json()
+    atual = dados.get("current")
+    if not isinstance(atual, dict):
+        raise ValueError("Resposta da Open-Meteo sem dados meteorológicos.")
+
+    codigo = atual.get("weather_code")
+    descricao = DESCRICOES_TEMPO.get(codigo, "Condição não identificada")
+    local = ", ".join(
+        str(parte)
+        for parte in (
+            cidade.get("name", nome_cidade),
+            cidade.get("admin1", ""),
+            cidade.get("country", ""),
+        )
+        if parte
+    )
+
+    return montar_resposta(
+        local=local,
+        horario=atual.get("time"),
+        temperatura=atual.get("temperature_2m", "N/D"),
+        sensacao=atual.get("apparent_temperature", "N/D"),
+        descricao=descricao,
+        umidade=atual.get("relative_humidity_2m", "N/D"),
+        vento=atual.get("wind_speed_10m", "N/D"),
+        precipitacao=atual.get("precipitation", "N/D"),
+        fonte="Open-Meteo",
+    )
+
+
+def consultar_wttr(nome_cidade, cidade=None):
+
+    logger.info("Tentando fonte alternativa WTTR.IN para %s", nome_cidade)
+
+
+    if cidade and cidade.get("latitude") is not None and cidade.get("longitude") is not None:
+        local_consulta = (
+            f"{cidade['latitude']},{cidade['longitude']}"
+        )
+    else:
+
+        local_consulta = nome_cidade
+
+    resposta = sessao.get(
+        f"{WTTR_API}/{requests.utils.quote(local_consulta, safe=',.-')}",
+        params={"format": "j1", "lang": "pt"},
+        headers={"Accept": "application/json"},
+        timeout=25,
+    )
+    resposta.raise_for_status()
+    dados = resposta.json()
+
+    condicoes = dados.get("current_condition") or []
+    if not condicoes:
+        raise ValueError("WTTR.IN não retornou as condições atuais.")
+
+    atual = condicoes[0]
+    areas = dados.get("nearest_area") or []
+    area = areas[0] if areas else {}
+
+    def primeiro_texto(lista):
+        if isinstance(lista, list) and lista:
+            return lista[0].get("value", "N/D")
+        return "N/D"
+
+    nome = primeiro_texto(area.get("areaName"))
+    regiao = primeiro_texto(area.get("region"))
+    pais = primeiro_texto(area.get("country"))
+
+
+    if cidade:
+        nome = cidade.get("name") or nome
+        regiao = cidade.get("admin1") or regiao
+        pais = cidade.get("country") or pais
+
+    local = ", ".join(parte for parte in (nome, regiao, pais) if parte)
+    if not local:
+        local = nome_cidade
+
+
+    horario = atual.get("localObsDateTime")
+
+
+    if not horario:
+        fusos = dados.get("time_zone") or []
+        if fusos and isinstance(fusos[0], dict):
+            horario = fusos[0].get("localtime")
+
+
+    if not horario:
+        hora_observacao = atual.get("observation_time")
+        previsoes_diarias = dados.get("weather") or []
+        data_previsao = (
+            previsoes_diarias[0].get("date")
+            if previsoes_diarias and isinstance(previsoes_diarias[0], dict)
+            else None
+        )
+
+        if data_previsao and hora_observacao:
+            horario = f"{data_previsao} {hora_observacao}"
+        elif data_previsao:
+            horario = data_previsao
+        elif hora_observacao:
+            horario = f"{datetime.now().strftime('%Y-%m-%d')} {hora_observacao}"
+
+
+    if not horario:
+        horario = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    return montar_resposta(
+        local=local,
+        horario=horario,
+        temperatura=atual.get("temp_C", "N/D"),
+        sensacao=atual.get("FeelsLikeC", "N/D"),
+        descricao=traduzir_condicao(primeiro_texto(atual.get("weatherDesc"))),
+        umidade=atual.get("humidity", "N/D"),
+        vento=atual.get("windspeedKmph", "N/D"),
+        precipitacao=atual.get("precipMM", "N/D"),
+        fonte="WTTR.IN (fonte alternativa)",
+    )
+
+
 def consultar_tempo(nome_cidade):
 
     texto_cache = obter_cache(nome_cidade)
