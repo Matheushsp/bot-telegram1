@@ -515,10 +515,17 @@ if __name__ == "__main__":
     #threading.Thread(target=configurar_webhook, daemon=True).start()
     logger.info("Iniciando o bot")
 
-    last_message = sessao.get(TELEGRAM_API+"/getUpdates").json()["result"][-1]
+    last_message = None
+    update = sessao.get(TELEGRAM_API+"/getUpdates").json()["result"]
+    if update != []:
+        last_message = update[-1]
+    
     while True:
-        message = sessao.get(TELEGRAM_API+"/getUpdates").json()["result"][-1]
-        if not message == last_message:
-            processar_mensagem(message["message"])
-            last_message = message
+        message = None
+        update = sessao.get(TELEGRAM_API+"/getUpdates").json()["result"]
+        if update != []:
+            message = update[-1]
+            if not message == last_message:
+                processar_mensagem(message["message"])
+                last_message = message
         time.sleep(1)
