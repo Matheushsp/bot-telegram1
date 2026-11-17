@@ -1,27 +1,15 @@
-
-
 import os
-
 import logging
-
 import threading
-
 import time
-
 import unicodedata
-
 from datetime import datetime
 
-
 import requests
-
 from flask import Flask, request
-
 from dotenv import load_dotenv
 
-
 load_dotenv()
-
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,38 +18,27 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not TOKEN:
     raise SystemExit(
         "ERRO: configure TELEGRAM_TOKEN nas Environment Variables do Render."
     )
 
-
 TELEGRAM_API = f"https://api.telegram.org/bot{TOKEN}"
 
-
 GEOCODING_API = "https://geocoding-api.open-meteo.com/v1/search"
-
 WEATHER_API = "https://api.open-meteo.com/v1/forecast"
-
 WTTR_API = "https://wttr.in"
-
 
 CACHE_TTL_SEGUNDOS = 30 * 60
 
 cache_tempo = {}
-
 cache_lock = threading.Lock()
 
-
 sessao = requests.Session()
-
 sessao.headers.update({"User-Agent": "BotPrevisaoTempo/1.0"})
 
-
 app = Flask(__name__)
-
 
 DESCRICOES_TEMPO = {
     0: "Céu limpo",
@@ -94,8 +71,6 @@ DESCRICOES_TEMPO = {
     99: "Trovoadas com granizo forte",
 }
 
-
-
 TRADUCOES_CONDICAO = {
     "patchy rain nearby": "Chuva irregular nas proximidades",
     "partly cloudy": "Parcialmente nublado",
@@ -113,12 +88,13 @@ TRADUCOES_CONDICAO = {
     "thunderstorm": "Tempestade com trovoadas",
 }
 
+
 def traduzir_condicao(descricao):
     texto = str(descricao or "N/D").strip()
     return TRADUCOES_CONDICAO.get(texto.casefold(), texto)
 
-def formatar_data_hora(horario):
 
+def formatar_data_hora(horario):
     if not horario:
         return "N/D"
 
@@ -130,17 +106,18 @@ def formatar_data_hora(horario):
         "%d/%m/%Y %H:%M",
         "%Y-%m-%d",
     )
+
     for formato in formatos:
         try:
             data = datetime.strptime(horario, formato)
             return data.strftime("%d/%m/%Y %H:%M")
         except (ValueError, TypeError):
             pass
+
     return str(horario)
 
 
 def enviar_mensagem(chat_id, texto):
-
     try:
         resposta = sessao.post(
             f"{TELEGRAM_API}/sendMessage",
@@ -149,8 +126,10 @@ def enviar_mensagem(chat_id, texto):
         )
         resposta.raise_for_status()
         dados = resposta.json()
+
         if not dados.get("ok"):
             logger.error("Telegram não confirmou o envio: %s", dados)
+
     except requests.RequestException:
         logger.exception("ERRO AO ENVIAR MENSAGEM AO TELEGRAM")
 
@@ -158,25 +137,33 @@ def enviar_mensagem(chat_id, texto):
 def obter_cache(nome_cidade):
     chave = nome_cidade.strip().casefold()
     agora = time.time()
+
     with cache_lock:
         item = cache_tempo.get(chave)
+
         if item and agora - item["horario"] < CACHE_TTL_SEGUNDOS:
             logger.info("Usando previsão em cache para %s", nome_cidade)
             return item["texto"]
+
         if item:
             cache_tempo.pop(chave, None)
+
     return None
 
 
 def salvar_cache(nome_cidade, texto):
     chave = nome_cidade.strip().casefold()
+
     with cache_lock:
-        cache_tempo[chave] = {"texto": texto, "horario": time.time()}
+        cache_tempo[chave] = {
+            "texto": texto,
+            "horario": time.time()
+        }
 
 
 def normalizar_nome(nome):
-
     texto = unicodedata.normalize("NFKD", str(nome or ""))
+
     return "".join(
         caractere for caractere in texto
         if not unicodedata.combining(caractere)
@@ -184,8 +171,8 @@ def normalizar_nome(nome):
 
 
 def localizar_cidade(nome_cidade):
-
     logger.info("Consultando geolocalização: %s", nome_cidade)
+
     resposta = sessao.get(
         GEOCODING_API,
         params={
@@ -197,6 +184,7 @@ def localizar_cidade(nome_cidade):
         },
         timeout=15,
     )
+
     resposta.raise_for_status()
     dados = resposta.json()
     resultados = dados.get("results") or []
@@ -206,19 +194,16 @@ def localizar_cidade(nome_cidade):
 
     nome_pedido = normalizar_nome(nome_cidade)
 
-
     correspondencias = [
         cidade for cidade in resultados
         if normalizar_nome(cidade.get("name", "")) == nome_pedido
     ]
-
 
     if not correspondencias:
         correspondencias = [
             cidade for cidade in resultados
             if nome_pedido in normalizar_nome(cidade.get("name", ""))
         ]
-
 
     cidade = correspondencias[0] if correspondencias else resultados[0]
 
@@ -230,6 +215,7 @@ def localizar_cidade(nome_cidade):
         cidade.get("latitude"),
         cidade.get("longitude"),
     )
+
     return cidade
 
 
@@ -252,9 +238,9 @@ def montar_resposta(
 
 
 def consultar_open_meteo(nome_cidade, cidade=None):
-
     if cidade is None:
         cidade = localizar_cidade(nome_cidade)
+
     if cidade is None:
         raise LookupError(f"Cidade não encontrada: {nome_cidade}")
 
@@ -271,14 +257,17 @@ def consultar_open_meteo(nome_cidade, cidade=None):
         },
         timeout=20,
     )
+
     resposta.raise_for_status()
     dados = resposta.json()
     atual = dados.get("current")
+
     if not isinstance(atual, dict):
         raise ValueError("Resposta da Open-Meteo sem dados meteorológicos.")
 
     codigo = atual.get("weather_code")
     descricao = DESCRICOES_TEMPO.get(codigo, "Condição não identificada")
+
     local = ", ".join(
         str(parte)
         for parte in (
@@ -303,16 +292,11 @@ def consultar_open_meteo(nome_cidade, cidade=None):
 
 
 def consultar_wttr(nome_cidade, cidade=None):
-
     logger.info("Tentando fonte alternativa WTTR.IN para %s", nome_cidade)
 
-
     if cidade and cidade.get("latitude") is not None and cidade.get("longitude") is not None:
-        local_consulta = (
-            f"{cidade['latitude']},{cidade['longitude']}"
-        )
+        local_consulta = f"{cidade['latitude']},{cidade['longitude']}"
     else:
-
         local_consulta = nome_cidade
 
     resposta = sessao.get(
@@ -321,10 +305,12 @@ def consultar_wttr(nome_cidade, cidade=None):
         headers={"Accept": "application/json"},
         timeout=25,
     )
+
     resposta.raise_for_status()
     dados = resposta.json()
 
     condicoes = dados.get("current_condition") or []
+
     if not condicoes:
         raise ValueError("WTTR.IN não retornou as condições atuais.")
 
@@ -341,29 +327,31 @@ def consultar_wttr(nome_cidade, cidade=None):
     regiao = primeiro_texto(area.get("region"))
     pais = primeiro_texto(area.get("country"))
 
-
     if cidade:
         nome = cidade.get("name") or nome
         regiao = cidade.get("admin1") or regiao
         pais = cidade.get("country") or pais
 
-    local = ", ".join(parte for parte in (nome, regiao, pais) if parte)
+    local = ", ".join(
+        parte for parte in (nome, regiao, pais) if parte
+    )
+
     if not local:
         local = nome_cidade
 
+    fusos = dados.get("time_zone") or []
+    horario = None
 
-    horario = atual.get("localObsDateTime")
-
+    if fusos and isinstance(fusos[0], dict):
+        horario = fusos[0].get("localtime")
 
     if not horario:
-        fusos = dados.get("time_zone") or []
-        if fusos and isinstance(fusos[0], dict):
-            horario = fusos[0].get("localtime")
-
+        horario = atual.get("localObsDateTime")
 
     if not horario:
         hora_observacao = atual.get("observation_time")
         previsoes_diarias = dados.get("weather") or []
+
         data_previsao = (
             previsoes_diarias[0].get("date")
             if previsoes_diarias and isinstance(previsoes_diarias[0], dict)
@@ -374,19 +362,15 @@ def consultar_wttr(nome_cidade, cidade=None):
             horario = f"{data_previsao} {hora_observacao}"
         elif data_previsao:
             horario = data_previsao
-        elif hora_observacao:
-            horario = f"{datetime.now().strftime('%Y-%m-%d')} {hora_observacao}"
-
-
-    if not horario:
-        horario = datetime.now().strftime("%Y-%m-%d %H:%M")
 
     return montar_resposta(
         local=local,
         horario=horario,
         temperatura=atual.get("temp_C", "N/D"),
         sensacao=atual.get("FeelsLikeC", "N/D"),
-        descricao=traduzir_condicao(primeiro_texto(atual.get("weatherDesc"))),
+        descricao=traduzir_condicao(
+            primeiro_texto(atual.get("weatherDesc"))
+        ),
         umidade=atual.get("humidity", "N/D"),
         vento=atual.get("windspeedKmph", "N/D"),
         precipitacao=atual.get("precipMM", "N/D"),
@@ -395,16 +379,16 @@ def consultar_wttr(nome_cidade, cidade=None):
 
 
 def consultar_tempo(nome_cidade):
-
     texto_cache = obter_cache(nome_cidade)
+
     if texto_cache:
         return texto_cache
 
     cidade = None
 
-
     try:
         cidade = localizar_cidade(nome_cidade)
+
         if cidade is None:
             raise LookupError(f"Cidade não encontrada: {nome_cidade}")
 
@@ -415,36 +399,53 @@ def consultar_tempo(nome_cidade):
             erro,
         )
 
-
     if cidade is not None:
         try:
             resultado = consultar_open_meteo(nome_cidade, cidade=cidade)
             salvar_cache(nome_cidade, resultado)
-            logger.info("Previsão recebida pela Open-Meteo para %s", nome_cidade)
+
+            logger.info(
+                "Previsão recebida pela Open-Meteo para %s",
+                nome_cidade
+            )
+
             return resultado
 
         except requests.HTTPError as erro:
             status = erro.response.status_code if erro.response is not None else None
             logger.warning("Open-Meteo retornou HTTP %s", status)
+
             if status != 429:
                 raise
-            logger.warning("Limite da Open-Meteo atingido. Acionando WTTR.IN.")
+
+            logger.warning(
+                "Limite da Open-Meteo atingido. Acionando WTTR.IN."
+            )
 
         except (requests.Timeout, requests.ConnectionError) as erro:
-            logger.warning("Open-Meteo indisponível (%s). Tentando WTTR.IN.", erro)
+            logger.warning(
+                "Open-Meteo indisponível (%s). Tentando WTTR.IN.",
+                erro
+            )
 
         except requests.RequestException as erro:
-            logger.warning("Falha na Open-Meteo (%s). Tentando WTTR.IN.", erro)
-
+            logger.warning(
+                "Falha na Open-Meteo (%s). Tentando WTTR.IN.",
+                erro
+            )
 
     resultado = consultar_wttr(nome_cidade, cidade=cidade)
     salvar_cache(nome_cidade, resultado)
-    logger.info("Previsão recebida pela WTTR.IN para %s", nome_cidade)
+
+    logger.info(
+        "Previsão recebida pela WTTR.IN para %s",
+        nome_cidade
+    )
+
     return resultado
 
 
 def processar_mensagem(mensagem):
-
     chat_id = mensagem.get("chat", {}).get("id")
     texto = mensagem.get("text", "")
 
@@ -480,21 +481,27 @@ def processar_mensagem(mensagem):
 
     if texto.startswith("/tempo"):
         partes = texto.split(maxsplit=1)
+
         if len(partes) < 2 or not partes[1].strip():
             enviar_mensagem(
                 chat_id,
                 "Informe uma cidade.\n\nExemplo: /tempo Campinas",
             )
             return
+
         nome_cidade = partes[1].strip()
 
     elif texto.startswith("/"):
         enviar_mensagem(chat_id, "Comando desconhecido. Digite /help.")
         return
+
     else:
         nome_cidade = texto
 
-    enviar_mensagem(chat_id, f"🔎 Consultando o tempo em {nome_cidade}...")
+    enviar_mensagem(
+        chat_id,
+        f"🔎 Consultando o tempo em {nome_cidade}..."
+    )
 
     try:
         resultado = consultar_tempo(nome_cidade)
@@ -509,7 +516,10 @@ def processar_mensagem(mensagem):
 
     except requests.HTTPError as erro:
         status = erro.response.status_code if erro.response is not None else "desconhecido"
-        logger.exception("ERRO HTTP NAS FONTES METEOROLÓGICAS: %s", status)
+        logger.exception(
+            "ERRO HTTP NAS FONTES METEOROLÓGICAS: %s",
+            status
+        )
         enviar_mensagem(
             chat_id,
             "Não consegui consultar a previsão neste momento. "
@@ -519,25 +529,35 @@ def processar_mensagem(mensagem):
 
     except requests.Timeout:
         logger.exception("TEMPO ESGOTADO")
-        enviar_mensagem(chat_id, "A consulta demorou demais. Tente novamente.")
-
-    except requests.RequestException:
-        logger.exception("ERRO DE CONEXÃO/REQUISIÇÃO NAS FONTES METEOROLÓGICAS")
         enviar_mensagem(
             chat_id,
-            "Não consegui conectar às fontes de previsão do tempo. Tente novamente mais tarde.",
+            "A consulta demorou demais. Tente novamente."
+        )
+
+    except requests.RequestException:
+        logger.exception(
+            "ERRO DE CONEXÃO/REQUISIÇÃO NAS FONTES METEOROLÓGICAS"
+        )
+        enviar_mensagem(
+            chat_id,
+            "Não consegui conectar às fontes de previsão do tempo. "
+            "Tente novamente mais tarde.",
         )
 
     except (ValueError, KeyError, TypeError):
         logger.exception("ERRO AO PROCESSAR OS DADOS")
         enviar_mensagem(
             chat_id,
-            "Recebi dados que não consegui interpretar. Tente novamente mais tarde.",
+            "Recebi dados que não consegui interpretar. "
+            "Tente novamente mais tarde.",
         )
 
     except Exception:
         logger.exception("ERRO INESPERADO")
-        enviar_mensagem(chat_id, "Ocorreu um erro inesperado. Confira os Logs do Render.")
+        enviar_mensagem(
+            chat_id,
+            "Ocorreu um erro inesperado. Confira os Logs do Render."
+        )
 
 
 @app.route("/", methods=["GET"])
@@ -548,10 +568,12 @@ def inicio():
 @app.route("/telegram", methods=["POST"])
 def webhook_telegram():
     mensagem_recebida = request.get_json(silent=True)
+
     if not isinstance(mensagem_recebida, dict):
         return "Requisição inválida", 400
 
     mensagem = mensagem_recebida.get("message")
+
     if mensagem:
         try:
             processar_mensagem(mensagem)
@@ -562,13 +584,14 @@ def webhook_telegram():
 
 
 def configurar_webhook():
-
     url_render = os.getenv("RENDER_EXTERNAL_URL")
+
     if not url_render:
         logger.error("RENDER_EXTERNAL_URL não está disponível.")
         return
 
     url_webhook = f"{url_render.rstrip('/')}/telegram"
+
     logger.info("Configurando webhook do Telegram.")
 
     try:
@@ -577,21 +600,36 @@ def configurar_webhook():
             json={"url": url_webhook},
             timeout=20,
         )
+
         resposta.raise_for_status()
         dados = resposta.json()
 
         if dados.get("ok"):
-            logger.info("Webhook configurado com sucesso: %s", url_webhook)
+            logger.info(
+                "Webhook configurado com sucesso: %s",
+                url_webhook
+            )
         else:
-            logger.error("Telegram recusou o webhook: %s", dados)
+            logger.error(
+                "Telegram recusou o webhook: %s",
+                dados
+            )
 
     except requests.RequestException:
         logger.exception("ERRO AO CONFIGURAR WEBHOOK")
 
 
 if __name__ == "__main__":
-    threading.Thread(target=configurar_webhook, daemon=True).start()
+    threading.Thread(
+        target=configurar_webhook,
+        daemon=True
+    ).start()
 
     porta = int(os.environ.get("PORT", "10000"))
+
     logger.info("Iniciando o bot na porta %s", porta)
-    app.run(host="0.0.0.0", port=porta)
+
+    app.run(
+        host="0.0.0.0",
+        port=porta
+    )
